@@ -1,0 +1,16 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  height: 100%;
+  /* App-shell: the canvas owns the screen, nothing scrolls behind the sheet. */
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+::selection {
+  background: #e0532f;
+  color: #fff9f0;
+}
