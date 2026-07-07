@@ -121,16 +121,6 @@ export default function Receipt({ builder, status, onCheckout }: ReceiptProps) {
           </p>
         )}
 
-        {/* Lock this pizza, start the next one */}
-        <motion.button
-          onClick={() => saveCurrentPizza()}
-          disabled={!hasIngredients}
-          whileTap={{ scale: 0.97 }}
-          className="mt-3 min-h-11 w-full rounded-2xl border-2 border-dashed border-tomato/40 text-sm font-extrabold text-tomato transition-colors hover:border-tomato hover:bg-tomato/5 disabled:opacity-40"
-        >
-          ＋ Save &amp; start next pizza
-        </motion.button>
-
         {/* Saved pizzas already in the order */}
         {savedPizzas.length > 0 && (
           <div className="mt-4">
@@ -187,8 +177,20 @@ export default function Receipt({ builder, status, onCheckout }: ReceiptProps) {
         )}
       </div>
 
-      <div className="mt-4 flex items-baseline justify-between">
-        <span className="text-sm font-bold text-ink-soft">
+      {/* Pinned footer — stays put no matter how long the ingredient list grows */}
+      <div className="shrink-0 border-t border-ink/10 pt-3">
+        {/* Lock this pizza, start the next one */}
+        <motion.button
+          onClick={() => saveCurrentPizza()}
+          disabled={!hasIngredients}
+          whileTap={{ scale: 0.97 }}
+          className="min-h-11 w-full rounded-2xl border-2 border-dashed border-tomato/40 text-sm font-extrabold text-tomato transition-colors hover:border-tomato hover:bg-tomato/5 disabled:opacity-40"
+        >
+          ＋ Save &amp; start next pizza
+        </motion.button>
+
+        <div className="mt-3 flex items-baseline justify-between">
+          <span className="text-sm font-bold text-ink-soft">
           Total
           {savedPizzas.length > 0 &&
             (() => {
@@ -232,6 +234,7 @@ export default function Receipt({ builder, status, onCheckout }: ReceiptProps) {
             Couldn&apos;t send the order. Please try again.
           </span>
         )}
+      </div>
       </div>
     </div>
   );
