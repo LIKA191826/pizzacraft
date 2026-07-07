@@ -10,6 +10,7 @@ import PizzaCanvas from "./PizzaCanvas";
 import IngredientTray from "./IngredientTray";
 import Receipt from "./Receipt";
 import BottomSheet from "./BottomSheet";
+import Cart from "./Cart";
 import { AnimatedPrice } from "./AnimatedPrice";
 
 /**
@@ -27,6 +28,7 @@ export default function PizzaBuilder() {
   const canvasRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<CheckoutStatus>("idle");
   const [mobileReceiptOpen, setMobileReceiptOpen] = useState(false);
+  const [cartOpen, setCartOpen] = useState(false);
 
   /**
    * Tray chips report their release point in PAGE coordinates
@@ -55,16 +57,25 @@ export default function PizzaBuilder() {
   );
 
   const handleCheckout = useCallback(async () => {
+    // Move the whole order into the cart first (this also clears the builder),
+    // then record it to Firestore. The cart keeps it locally for 10 minutes so
+    // it can still be cancelled.
+    const order = builder.placeOrder();
+    if (!order) return;
+    setMobileReceiptOpen(false);
     setStatus("submitting");
-    const result = await submitOrder(builder.buildOrderPayload());
+    const result = await submitOrder({
+      pizzas: order.pizzas,
+      totalPrice: order.totalPrice,
+      currency: "GEL",
+      createdAt: new Date(order.placedAt).toISOString(),
+    });
+    setStatus(result.ok ? "success" : "error");
+    setCartOpen(true);
     if (result.ok) {
-      setStatus("success");
-      builder.resetOrder();
       setTimeout(() => setStatus("idle"), 4000);
-    } else {
-      setStatus("error");
     }
-  }, [builder.buildOrderPayload, builder.resetOrder]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [builder.placeOrder]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const receipt = (
     <Receipt builder={builder} status={status} onCheckout={handleCheckout} />
@@ -78,19 +89,36 @@ export default function PizzaBuilder() {
           🍕 PizzaCraft
         </h1>
 
-        {/* Mobile: total pill — opens the full-screen order view */}
-        <button
-          className="flex min-h-11 items-center gap-2 rounded-full bg-parchment px-4 shadow-chip ring-1 ring-ink/5 md:hidden"
-          onClick={() => setMobileReceiptOpen(true)}
-          aria-expanded={mobileReceiptOpen}
-          aria-label="Open your order"
-        >
-          <AnimatedPrice
-            value={builder.totalPrice}
-            className="text-base font-extrabold tabular-nums"
-          />
-          <span className="text-xs text-ink-soft">▾</span>
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Mobile: total pill — opens the full-screen order view */}
+          <button
+            className="flex min-h-11 items-center gap-2 rounded-full bg-parchment px-4 shadow-chip ring-1 ring-ink/5 md:hidden"
+            onClick={() => setMobileReceiptOpen(true)}
+            aria-expanded={mobileReceiptOpen}
+            aria-label="Open your order"
+          >
+            <AnimatedPrice
+              value={builder.totalPrice}
+              className="text-base font-extrabold tabular-nums"
+            />
+            <span className="text-xs text-ink-soft">▾</span>
+          </button>
+
+          {/* Cart — placed orders live here (all breakpoints) */}
+          <button
+            className="relative flex min-h-11 items-center gap-1.5 rounded-full bg-parchment px-4 shadow-chip ring-1 ring-ink/5"
+            onClick={() => setCartOpen(true)}
+            aria-label={`Open cart, ${builder.cart.length} orders`}
+          >
+            <span className="text-base">🛒</span>
+            <span className="hidden text-sm font-extrabold sm:inline">Cart</span>
+            {builder.cart.length > 0 && (
+              <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-tomato px-1 text-xs font-extrabold text-parchment">
+                {builder.cart.length}
+              </span>
+            )}
+          </button>
+        </div>
       </header>
 
       {/* Mobile: full-screen order view — solid, nothing peeks from behind */}
@@ -153,6 +181,14 @@ export default function PizzaBuilder() {
       <BottomSheet>
         <IngredientTray onDrop={handleTrayDrop} onQuickAdd={handleQuickAdd} />
       </BottomSheet>
+
+      {/* Cart overlay — placed orders + 10-minute cancellation */}
+      <Cart
+        open={cartOpen}
+        orders={builder.cart}
+        onClose={() => setCartOpen(false)}
+        onCancel={builder.cancelCartOrder}
+      />
     </div>
   );
 }

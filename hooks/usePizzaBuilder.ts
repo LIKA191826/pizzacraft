@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import type {
+  CartOrder,
   IngredientDef,
   OrderPayload,
   PizzaSize,
@@ -13,6 +14,9 @@ import { INGREDIENT_PRICE, getSize } from "@/lib/ingredients";
 
 /** Toppings must land inside the sauce area — 0.36 canvas-widths from center. */
 const MAX_TOPPING_RADIUS = 0.36;
+
+/** How long after placing an order it can still be cancelled. */
+export const CANCEL_WINDOW_MS = 10 * 60 * 1000;
 
 function makeId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -40,6 +44,11 @@ function clampToPizza(x: number, y: number): { x: number; y: number } {
   return { x: 0.5 + dx * scale, y: 0.5 + dy * scale };
 }
 
+/** Price of a pizza from its size + ingredient count. */
+function priceOf(size: PizzaSize, count: number): number {
+  return getSize(size).basePrice + count * INGREDIENT_PRICE;
+}
+
 export interface PizzaBuilderApi {
   /** The pizza currently on the canvas. */
   selectedIngredients: PlacedIngredient[];
@@ -57,10 +66,14 @@ export interface PizzaBuilderApi {
   currentCounts: boolean;
   /** 1-based position of the pizza being built. */
   currentPizzaNumber: number;
-  /** Finished pizzas waiting in the order. */
+  /** Finished pizzas waiting in the current order. */
   savedPizzas: SavedPizza[];
   /** Grand total across saved pizzas + the current one (when it counts). */
   totalPrice: number;
+  /** True when there's something worth checking out. */
+  canCheckout: boolean;
+  /** Placed orders sitting in the cart. */
+  cart: CartOrder[];
   /** Returns true if the drop resulted in a change (drives haptics/pulse). */
   addIngredient: (def: IngredientDef, x: number, y: number) => boolean;
   removeInstance: (instanceId: string) => void;
@@ -72,8 +85,12 @@ export interface PizzaBuilderApi {
   /** Locks the current pizza into the order and starts a fresh dough. */
   saveCurrentPizza: () => boolean;
   removeSavedPizza: (pizzaId: string) => void;
-  /** Wipes the whole order (after a successful checkout). */
-  resetOrder: () => void;
+  /** Pulls a saved pizza back onto the canvas to edit it. */
+  editSavedPizza: (pizzaId: string) => void;
+  /** Moves the whole current order into the cart. Returns it, or null. */
+  placeOrder: () => CartOrder | null;
+  /** Cancels a cart order — only within CANCEL_WINDOW_MS of placing it. */
+  cancelCartOrder: (orderId: string) => void;
   buildOrderPayload: () => OrderPayload;
 }
 
@@ -83,15 +100,13 @@ export function usePizzaBuilder(): PizzaBuilderApi {
   >([]);
   const [size, setSize] = useState<PizzaSize>("medium");
   const [savedPizzas, setSavedPizzas] = useState<SavedPizza[]>([]);
+  const [cart, setCart] = useState<CartOrder[]>([]);
 
   const addIngredient = useCallback(
     (def: IngredientDef, x: number, y: number): boolean => {
       let changed = false;
       setSelectedIngredients((prev) => {
         if (def.mode === "layer") {
-          // Same layer twice is a no-op…
-          if (prev.some((p) => p.ingredientId === def.id)) return prev;
-          changed = true;
           const placed: PlacedIngredient = {
             instanceId: makeId(),
             ingredientId: def.id,
@@ -103,9 +118,24 @@ export function usePizzaBuilder(): PizzaBuilderApi {
             y: 0.5,
             rotation: 0,
           };
-          // …but a second sauce or cheese swaps out the old one.
-          if (def.category === "sauce" || def.category === "cheese") {
-            return [...prev.filter((p) => p.category !== def.category), placed];
+
+          // Sauce toggles: tapping the sauce that's already on takes it off,
+          // tapping again puts it back — on/off/on/off…
+          if (def.category === "sauce") {
+            changed = true;
+            if (prev.some((p) => p.ingredientId === def.id)) {
+              return prev.filter((p) => p.ingredientId !== def.id);
+            }
+            // A different sauce simply replaces the current one.
+            return [...prev.filter((p) => p.category !== "sauce"), placed];
+          }
+
+          // Other layers: same id is a no-op…
+          if (prev.some((p) => p.ingredientId === def.id)) return prev;
+          changed = true;
+          // …cheese still swaps within its category.
+          if (def.category === "cheese") {
+            return [...prev.filter((p) => p.category !== "cheese"), placed];
           }
           return [...prev, placed];
         }
@@ -180,6 +210,9 @@ export function usePizzaBuilder(): PizzaBuilderApi {
     [savedPizzas, currentCounts, currentPrice]
   );
 
+  const canCheckout =
+    savedPizzas.length > 0 || selectedIngredients.length > 0;
+
   const saveCurrentPizza = useCallback((): boolean => {
     if (selectedIngredients.length === 0) return false;
     setSavedPizzas((prev) => [
@@ -200,9 +233,84 @@ export function usePizzaBuilder(): PizzaBuilderApi {
     setSavedPizzas((prev) => prev.filter((p) => p.pizzaId !== pizzaId));
   }, []);
 
-  const resetOrder = useCallback(() => {
+  /**
+   * Re-open a saved pizza on the canvas. If the canvas already holds an
+   * unsaved pizza, it's parked into the order first so nothing is lost.
+   */
+  const editSavedPizza = useCallback(
+    (pizzaId: string) => {
+      const target = savedPizzas.find((p) => p.pizzaId === pizzaId);
+      if (!target) return;
+      setSavedPizzas((prev) => {
+        const without = prev.filter((p) => p.pizzaId !== pizzaId);
+        if (selectedIngredients.length > 0) {
+          return [
+            ...without,
+            {
+              pizzaId: makeId(),
+              size,
+              basePrice: getSize(size).basePrice,
+              ingredients: selectedIngredients,
+              price: priceOf(size, selectedIngredients.length),
+            },
+          ];
+        }
+        return without;
+      });
+      setSelectedIngredients(target.ingredients);
+      setSize(target.size);
+    },
+    [savedPizzas, selectedIngredients, size]
+  );
+
+  /** Snapshot of every pizza in the current order (saved + on-canvas). */
+  const collectPizzas = useCallback((): SavedPizza[] => {
+    return [
+      ...savedPizzas,
+      ...(currentCounts
+        ? [
+            {
+              pizzaId: makeId(),
+              size,
+              basePrice: currentBasePrice,
+              ingredients: selectedIngredients,
+              price: currentPrice,
+            },
+          ]
+        : []),
+    ];
+  }, [
+    savedPizzas,
+    currentCounts,
+    size,
+    currentBasePrice,
+    selectedIngredients,
+    currentPrice,
+  ]);
+
+  const placeOrder = useCallback((): CartOrder | null => {
+    if (!canCheckout) return null;
+    const order: CartOrder = {
+      orderId: makeId(),
+      pizzas: collectPizzas(),
+      totalPrice,
+      placedAt: Date.now(),
+    };
+    setCart((prev) => [order, ...prev]);
+    // Start a clean order for the next round.
     setSavedPizzas([]);
     setSelectedIngredients([]);
+    return order;
+  }, [canCheckout, collectPizzas, totalPrice]);
+
+  const cancelCartOrder = useCallback((orderId: string) => {
+    setCart((prev) =>
+      prev.filter(
+        (o) =>
+          // Keep everything except the matching order still inside its window.
+          !(o.orderId === orderId && Date.now() - o.placedAt < CANCEL_WINDOW_MS)
+      )
+    );
   }, []);
 
   /** Receipt lines for the CURRENT pizza, grouped by ingredient. */
@@ -226,36 +334,15 @@ export function usePizzaBuilder(): PizzaBuilderApi {
     return Array.from(lines.values());
   }, [selectedIngredients]);
 
-  const buildOrderPayload = useCallback((): OrderPayload => {
-    const pizzas: SavedPizza[] = [
-      ...savedPizzas,
-      ...(currentCounts
-        ? [
-            {
-              pizzaId: makeId(),
-              size,
-              basePrice: currentBasePrice,
-              ingredients: selectedIngredients,
-              price: currentPrice,
-            },
-          ]
-        : []),
-    ];
-    return {
-      pizzas,
+  const buildOrderPayload = useCallback(
+    (): OrderPayload => ({
+      pizzas: collectPizzas(),
       totalPrice,
       currency: "GEL",
       createdAt: new Date().toISOString(),
-    };
-  }, [
-    savedPizzas,
-    currentCounts,
-    size,
-    currentBasePrice,
-    selectedIngredients,
-    currentPrice,
-    totalPrice,
-  ]);
+    }),
+    [collectPizzas, totalPrice]
+  );
 
   return {
     selectedIngredients,
@@ -268,6 +355,8 @@ export function usePizzaBuilder(): PizzaBuilderApi {
     currentPizzaNumber: savedPizzas.length + 1,
     savedPizzas,
     totalPrice,
+    canCheckout,
+    cart,
     addIngredient,
     removeInstance,
     removeOne,
@@ -275,7 +364,9 @@ export function usePizzaBuilder(): PizzaBuilderApi {
     clearCurrent,
     saveCurrentPizza,
     removeSavedPizza,
-    resetOrder,
+    editSavedPizza,
+    placeOrder,
+    cancelCartOrder,
     buildOrderPayload,
   };
 }

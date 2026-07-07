@@ -30,10 +30,12 @@ export default function Receipt({ builder, status, onCheckout }: ReceiptProps) {
     currentPizzaNumber,
     savedPizzas,
     totalPrice,
+    canCheckout,
     removeOne,
     clearCurrent,
     saveCurrentPizza,
     removeSavedPizza,
+    editSavedPizza,
   } = builder;
 
   const sizeDef = getSize(size);
@@ -147,18 +149,26 @@ export default function Receipt({ builder, status, onCheckout }: ReceiptProps) {
                   className="overflow-hidden border-b border-dashed border-ink/10"
                 >
                   <div className="flex items-center gap-2.5 py-2">
-                    <MiniPizza ingredients={pizza.ingredients} size={40} />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-bold">
-                        Pizza {i + 1} · {getSize(pizza.size).label}
-                      </p>
-                      <p className="text-xs font-semibold text-ink-soft">
-                        {pizza.ingredients.length}{" "}
-                        {pizza.ingredients.length === 1
-                          ? "ingredient"
-                          : "ingredients"}
-                      </p>
-                    </div>
+                    {/* Tap the pizza to pull it back onto the canvas and edit. */}
+                    <button
+                      onClick={() => editSavedPizza(pizza.pizzaId)}
+                      aria-label={`Edit pizza ${i + 1}`}
+                      className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl text-left transition-colors hover:bg-ink/5"
+                    >
+                      <MiniPizza ingredients={pizza.ingredients} size={40} />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-bold">
+                          Pizza {i + 1} · {getSize(pizza.size).label}
+                        </p>
+                        <p className="text-xs font-semibold text-ink-soft">
+                          {pizza.ingredients.length}{" "}
+                          {pizza.ingredients.length === 1
+                            ? "ingredient"
+                            : "ingredients"}
+                          <span className="ml-1 text-tomato">· Edit ✏️</span>
+                        </p>
+                      </div>
+                    </button>
                     <span className="shrink-0 text-sm font-bold">
                       {formatPrice(pizza.price)}
                     </span>
@@ -180,12 +190,16 @@ export default function Receipt({ builder, status, onCheckout }: ReceiptProps) {
       <div className="mt-4 flex items-baseline justify-between">
         <span className="text-sm font-bold text-ink-soft">
           Total
-          {savedPizzas.length > 0 && (
-            <span className="font-semibold text-ink-soft/70">
-              {" "}
-              · {savedPizzas.length + (currentCounts ? 1 : 0)} pizzas
-            </span>
-          )}
+          {savedPizzas.length > 0 &&
+            (() => {
+              const count = savedPizzas.length + (currentCounts ? 1 : 0);
+              return (
+                <span className="font-semibold text-ink-soft/70">
+                  {" "}
+                  · {count} {count === 1 ? "pizza" : "pizzas"}
+                </span>
+              );
+            })()}
         </span>
         <AnimatedPrice
           value={totalPrice}
@@ -195,7 +209,7 @@ export default function Receipt({ builder, status, onCheckout }: ReceiptProps) {
 
       <motion.button
         onClick={onCheckout}
-        disabled={status === "submitting"}
+        disabled={status === "submitting" || !canCheckout}
         whileHover={{ scale: 1.02 }}
         whileTap={{ scale: 0.97 }}
         className="mt-3 min-h-12 w-full rounded-2xl bg-tomato text-base font-extrabold text-parchment shadow-warm transition-colors hover:bg-tomato-deep disabled:opacity-60"
@@ -210,7 +224,7 @@ export default function Receipt({ builder, status, onCheckout }: ReceiptProps) {
             animate={{ opacity: 1, y: 0 }}
             className="text-green-700"
           >
-            Order sent — the oven is heating up! 🎉
+            Added to cart 🛒 — 10 min to cancel.
           </motion.span>
         )}
         {status === "error" && (

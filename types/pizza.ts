@@ -92,6 +92,15 @@ export interface OrderPayload {
   createdAt: string; // ISO-8601
 }
 
+/** A placed order sitting in the cart, cancellable for a limited window. */
+export interface CartOrder {
+  orderId: string;
+  pizzas: SavedPizza[];
+  totalPrice: number;
+  /** Epoch ms when the order was placed — drives the cancel countdown. */
+  placedAt: number;
+}
+
 export type CheckoutStatus = "idle" | "submitting" | "success" | "error";
 
 export interface SubmitResult {
