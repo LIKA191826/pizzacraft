@@ -17,9 +17,9 @@ import { AnimatedPrice } from "./AnimatedPrice";
  * Top-level orchestrator. Owns the builder state, the canvas ref used for
  * drop hit-testing, and the responsive shell:
  *
- *   mobile  — stacked: header (total pill) / size picker + canvas / bottom
- *             sheet; the receipt opens as a full-screen order view so it
- *             never half-covers the pizza
+ *   mobile  — stacked: header / size picker + canvas / ingredient drawer /
+ *             a persistent checkout bar pinned to the bottom. Tapping the bar
+ *             raises the order-review sheet with the Checkout button.
  *   tablet  — 2 columns: tray | canvas over receipt
  *   desktop — 3 columns: tray | canvas | receipt
  */
@@ -29,6 +29,11 @@ export default function PizzaBuilder() {
   const [status, setStatus] = useState<CheckoutStatus>("idle");
   const [mobileReceiptOpen, setMobileReceiptOpen] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);
+
+  // How many pizzas the current order holds (saved + the one on the canvas
+  // when it counts) — shown on the mobile checkout bar.
+  const mobilePizzaCount =
+    builder.savedPizzas.length + (builder.currentCounts ? 1 : 0);
 
   /**
    * Tray chips report their release point in PAGE coordinates
@@ -89,57 +94,55 @@ export default function PizzaBuilder() {
           🍕 PizzaCraft
         </h1>
 
-        <div className="flex items-center gap-2">
-          {/* Mobile: total pill — opens the full-screen order view */}
-          <button
-            className="flex min-h-11 items-center gap-2 rounded-full bg-parchment px-4 shadow-chip ring-1 ring-ink/5 md:hidden"
-            onClick={() => setMobileReceiptOpen(true)}
-            aria-expanded={mobileReceiptOpen}
-            aria-label="Open your order"
-          >
-            <AnimatedPrice
-              value={builder.totalPrice}
-              className="text-base font-extrabold tabular-nums"
-            />
-            <span className="text-xs text-ink-soft">▾</span>
-          </button>
-
-          {/* Cart — placed orders live here (all breakpoints) */}
-          <button
-            className="relative flex min-h-11 items-center gap-1.5 rounded-full bg-parchment px-4 shadow-chip ring-1 ring-ink/5"
-            onClick={() => setCartOpen(true)}
-            aria-label={`Open cart, ${builder.cart.length} orders`}
-          >
-            <span className="text-base">🛒</span>
-            <span className="hidden text-sm font-extrabold sm:inline">Cart</span>
-            {builder.cart.length > 0 && (
-              <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-tomato px-1 text-xs font-extrabold text-parchment">
-                {builder.cart.length}
-              </span>
-            )}
-          </button>
-        </div>
+        {/* Cart — placed (paid) orders. Hidden on mobile until there's one,
+            so the only bottom-of-funnel control there is the checkout bar. */}
+        <button
+          className={`relative min-h-11 items-center gap-1.5 rounded-full bg-parchment px-4 shadow-chip ring-1 ring-ink/5 md:flex ${
+            builder.cart.length > 0 ? "flex" : "hidden"
+          }`}
+          onClick={() => setCartOpen(true)}
+          aria-label={`Open cart, ${builder.cart.length} placed orders`}
+        >
+          <span className="text-base">🛒</span>
+          <span className="hidden text-sm font-extrabold sm:inline">Cart</span>
+          {builder.cart.length > 0 && (
+            <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-tomato px-1 text-xs font-extrabold text-parchment">
+              {builder.cart.length}
+            </span>
+          )}
+        </button>
       </header>
 
-      {/* Mobile: full-screen order view — solid, nothing peeks from behind */}
+      {/* Mobile: order review — a sheet that rises from the bottom (where the
+          checkout bar is), so the gesture reads as "open my order". */}
       <AnimatePresence>
         {mobileReceiptOpen && (
-          <motion.div
-            className="fixed inset-0 z-50 flex flex-col bg-cream px-3 pb-3 pt-16 md:hidden"
-            initial={{ opacity: 0, y: -24 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -24 }}
-            transition={{ type: "spring", stiffness: 400, damping: 34 }}
-          >
-            <button
-              aria-label="Back to the pizza"
+          <>
+            <motion.div
+              className="fixed inset-0 z-50 bg-ink/40 md:hidden"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
               onClick={() => setMobileReceiptOpen(false)}
-              className="absolute right-4 top-3 flex h-11 w-11 items-center justify-center rounded-full bg-parchment text-lg shadow-chip ring-1 ring-ink/5"
+            />
+            <motion.div
+              className="fixed inset-x-0 bottom-0 z-50 flex max-h-[90dvh] flex-col rounded-t-[28px] bg-cream px-3 pb-[env(safe-area-inset-bottom)] pt-2 md:hidden"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", stiffness: 380, damping: 38 }}
             >
-              ✕
-            </button>
-            <div className="min-h-0 flex-1">{receipt}</div>
-          </motion.div>
+              <div className="mx-auto mb-2 mt-1 h-1.5 w-12 shrink-0 rounded-full bg-ink/15" />
+              <button
+                aria-label="Close order"
+                onClick={() => setMobileReceiptOpen(false)}
+                className="absolute right-4 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-parchment text-base shadow-chip ring-1 ring-ink/5"
+              >
+                ✕
+              </button>
+              <div className="min-h-0 flex-1 pb-3">{receipt}</div>
+            </motion.div>
+          </>
         )}
       </AnimatePresence>
 
@@ -150,8 +153,9 @@ export default function PizzaBuilder() {
           <IngredientTray onDrop={handleTrayDrop} onQuickAdd={handleQuickAdd} />
         </aside>
 
-        {/* Center: size picker + the pizza — room for the sheet's peek on mobile */}
-        <main className="flex min-h-0 flex-col items-center justify-center gap-3 pb-40 md:gap-4 md:pb-0">
+        {/* Center: size picker + the pizza. On mobile the bottom is stacked
+            (checkout bar 76px + ingredient peek 168px), so leave room. */}
+        <main className="flex min-h-0 flex-col items-center justify-center gap-3 pb-[244px] md:gap-4 md:pb-0">
           <div className="flex items-center gap-3">
             <span className="text-sm font-extrabold text-ink-soft">
               Pizza {builder.currentPizzaNumber}
@@ -177,10 +181,33 @@ export default function PizzaBuilder() {
         </section>
       </div>
 
-      {/* Mobile: swipeable ingredient drawer */}
+      {/* Mobile: swipeable ingredient drawer (sits above the checkout bar) */}
       <BottomSheet>
         <IngredientTray onDrop={handleTrayDrop} onQuickAdd={handleQuickAdd} />
       </BottomSheet>
+
+      {/* Mobile: the one, always-visible way to review & check out. Shows the
+          running total so the order's value is never hidden, and a single
+          obvious button — the fix for "where do I tap to check out?". */}
+      <button
+        onClick={() => setMobileReceiptOpen(true)}
+        aria-label="View your order and check out"
+        className="fixed inset-x-0 bottom-0 z-40 flex items-center justify-between gap-3 border-t border-ink/10 bg-parchment px-4 pb-[calc(0.7rem+env(safe-area-inset-bottom))] pt-2.5 shadow-[0_-10px_30px_-12px_rgba(62,46,35,0.35)] md:hidden"
+      >
+        <span className="flex flex-col items-start leading-tight">
+          <span className="text-[11px] font-bold uppercase tracking-wide text-ink-soft">
+            {mobilePizzaCount} {mobilePizzaCount === 1 ? "pizza" : "pizzas"} · your order
+          </span>
+          <AnimatedPrice
+            value={builder.totalPrice}
+            className="text-xl font-extrabold tabular-nums"
+          />
+        </span>
+        <span className="flex min-h-12 items-center gap-2 rounded-2xl bg-tomato px-6 text-base font-extrabold text-parchment shadow-warm">
+          View order
+          <span aria-hidden className="text-lg leading-none">↑</span>
+        </span>
+      </button>
 
       {/* Cart overlay — placed orders + 10-minute cancellation */}
       <Cart
