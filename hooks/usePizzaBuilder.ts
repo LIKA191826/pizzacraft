@@ -130,6 +130,16 @@ export function usePizzaBuilder(): PizzaBuilderApi {
             return [...prev.filter((p) => p.category !== "sauce"), placed];
           }
 
+          // Drizzles toggle the same way, but stack independently — you can
+          // have hot honey and ranch at once; each tap adds or removes its own.
+          if (def.category === "drizzle") {
+            changed = true;
+            if (prev.some((p) => p.ingredientId === def.id)) {
+              return prev.filter((p) => p.ingredientId !== def.id);
+            }
+            return [...prev, placed];
+          }
+
           // Other layers: same id is a no-op…
           if (prev.some((p) => p.ingredientId === def.id)) return prev;
           changed = true;
